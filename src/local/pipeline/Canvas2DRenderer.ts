@@ -12,6 +12,7 @@ interface RenderContext {
 export class Canvas2DRenderer {
   private _canvas: Canvas;
   private ctx: any;
+  private _offscreenCanvas: Canvas | null = null;
 
   constructor(canvas: Canvas) {
     this._canvas = canvas;
@@ -20,6 +21,47 @@ export class Canvas2DRenderer {
 
   get canvas(): Canvas {
     return this._canvas;
+  }
+
+  /**
+   * Get or create offscreen canvas for buffer rendering.
+   */
+  getOffscreenCanvas(width: number, height: number): Canvas {
+    if (!this._offscreenCanvas || this._offscreenCanvas.width !== width || this._offscreenCanvas.height !== height) {
+      this._offscreenCanvas = createCanvas(width, height);
+    }
+    return this._offscreenCanvas;
+  }
+
+  /**
+   * Create a temporary buffer canvas.
+   */
+  createBuffer(width: number, height: number): Canvas {
+    return createCanvas(width, height);
+  }
+
+  /**
+   * Copy canvas contents to a buffer.
+   */
+  copyToBuffer(canvas: Canvas): Buffer {
+    return canvas.toBuffer('image/png');
+  }
+
+  /**
+   * Draw buffer to this canvas at specified position with optional alpha.
+   */
+  drawBuffer(buffer: Buffer, x: number, y: number, width: number, height: number, alpha = 1): void {
+    // For buffer-based drawing, we need to reload the image
+    // This is a limitation - for efficiency, use canvas references where possible
+  }
+
+  /**
+   * Draw another canvas onto this canvas.
+   */
+  drawCanvas(sourceCanvas: Canvas, x: number, y: number, width: number, height: number, alpha = 1): void {
+    this.ctx.globalAlpha = alpha;
+    this.ctx.drawImage(sourceCanvas, x, y, width, height);
+    this.ctx.globalAlpha = 1;
   }
 
   /**
@@ -55,6 +97,8 @@ export class Canvas2DRenderer {
       shadowBlur?: number;
       shadowOffsetX?: number;
       shadowOffsetY?: number;
+      xAlignment?: number | string;
+      yAlignment?: number | string;
     },
     _context: RenderContext
   ): void {
@@ -68,6 +112,45 @@ export class Canvas2DRenderer {
     ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px "${fontFamily}"`;
     ctx.textBaseline = 'top';
 
+    // Calculate alignment offsets
+    let alignX = 0;
+    let alignY = 0;
+
+    // Handle xAlignment (0-100% or 0-1 for 0%-100%)
+    // Note: For xAlignment, we measure the first line of text
+    const firstLine = text.split('\n')[0];
+    const textWidth = ctx.measureText(firstLine).width;
+    const lineHeight = fontSize * 1.2;
+
+    if (style.xAlignment !== undefined) {
+      if (typeof style.xAlignment === 'string' && style.xAlignment.endsWith('%')) {
+        alignX = (parseFloat(style.xAlignment) / 100) * width - textWidth / 2;
+      } else if (typeof style.xAlignment === 'number') {
+        if (style.xAlignment > 1) {
+          // Assume pixel value
+          alignX = style.xAlignment - textWidth / 2;
+        } else {
+          // Assume 0-1 range
+          alignX = style.xAlignment * width - textWidth / 2;
+        }
+      }
+    }
+
+    // Handle yAlignment
+    if (style.yAlignment !== undefined) {
+      if (typeof style.yAlignment === 'string' && style.yAlignment.endsWith('%')) {
+        alignY = (parseFloat(style.yAlignment) / 100) * height - lineHeight / 2;
+      } else if (typeof style.yAlignment === 'number') {
+        if (style.yAlignment > 1) {
+          // Assume pixel value
+          alignY = style.yAlignment - lineHeight / 2;
+        } else {
+          // Assume 0-1 range
+          alignY = style.yAlignment * height - lineHeight / 2;
+        }
+      }
+    }
+
     // Apply shadow
     if (style.shadowColor && style.shadowBlur) {
       ctx.shadowColor = style.shadowColor;
@@ -79,14 +162,14 @@ export class Canvas2DRenderer {
     // Draw fill
     if (style.fillColor) {
       ctx.fillStyle = style.fillColor;
-      this.wrapText(text, x, y, width, height, fontSize, style);
+      this.wrapText(text, x + alignX, y + alignY, width, height, fontSize, style);
     }
 
     // Draw stroke
     if (style.strokeColor && style.strokeWidth) {
       ctx.strokeStyle = style.strokeColor;
       ctx.lineWidth = style.strokeWidth;
-      ctx.strokeText(text, x, y);
+      ctx.strokeText(text, x + alignX, y + alignY);
     }
 
     // Reset shadow
@@ -308,5 +391,197 @@ export class Canvas2DRenderer {
    */
   resetBlendMode(): void {
     this.ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /**
+   * Apply blur filter.
+   */
+  setBlurRadius(radius: number): void {
+    if (radius > 0) {
+      this.ctx.filter = `blur(${radius}px)`;
+    }
+  }
+
+  /**
+   * Reset blur filter.
+   */
+  resetBlur(): void {
+    this.ctx.filter = 'none';
+  }
+
+  /**
+   * Begin clipping region for rectangular clip.
+   */
+  beginClip(x: number, y: number, width: number, height: number): void {
+    this.ctx.save();
+    this.ctx.beginPath();
+    this.ctx.rect(x, y, width, height);
+    this.ctx.clip();
+  }
+
+  /**
+   * End clipping region.
+   */
+  endClip(): void {
+    this.ctx.restore();
+  }
+
+  /**
+   * Apply shadow.
+   */
+  setShadow(color: string, blur: number, offsetX: number, offsetY: number): void {
+    this.ctx.shadowColor = color;
+    this.ctx.shadowBlur = blur;
+    this.ctx.shadowOffsetX = offsetX;
+    this.ctx.shadowOffsetY = offsetY;
+  }
+
+  /**
+   * Reset shadow.
+   */
+  resetShadow(): void {
+    this.ctx.shadowColor = 'transparent';
+    this.ctx.shadowBlur = 0;
+    this.ctx.shadowOffsetX = 0;
+    this.ctx.shadowOffsetY = 0;
+  }
+
+  /**
+   * Apply color overlay (e.g., 'rgba(0,0,0,0.15)').
+   */
+  setColorOverlay(color: string, x: number, y: number, width: number, height: number): void {
+    this.ctx.save();
+    this.ctx.globalCompositeOperation = 'source-over';
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x, y, width, height);
+    this.ctx.restore();
+  }
+
+  /**
+   * Apply rotation transform around a point.
+   */
+  applyRotation(radians: number, centerX: number, centerY: number): void {
+    this.ctx.save();
+    this.ctx.translate(centerX, centerY);
+    this.ctx.rotate(radians);
+    this.ctx.translate(-centerX, -centerY);
+  }
+
+  /**
+   * Apply scale transform around a point.
+   */
+  applyScale(scaleX: number, scaleY: number, centerX: number, centerY: number): void {
+    this.ctx.save();
+    this.ctx.translate(centerX, centerY);
+    this.ctx.scale(scaleX, scaleY);
+    this.ctx.translate(-centerX, -centerY);
+  }
+
+  /**
+   * Apply both rotation and scale transforms around a point.
+   */
+  applyTransforms(rotation: number, scaleX: number, scaleY: number, centerX: number, centerY: number): void {
+    this.ctx.save();
+    this.ctx.translate(centerX, centerY);
+    if (rotation !== 0) {
+      this.ctx.rotate(rotation);
+    }
+    if (scaleX !== 1 || scaleY !== 1) {
+      this.ctx.scale(scaleX, scaleY);
+    }
+    this.ctx.translate(-centerX, -centerY);
+  }
+
+  /**
+   * Reset transform (must be called after applyTransforms).
+   */
+  resetTransform(): void {
+    this.ctx.restore();
+  }
+
+  /**
+   * Draw circular wipe transition.
+   * @param fromCanvas Previous frame canvas
+   * @param toCanvas Current frame canvas
+   * @param progress 0-1 transition progress
+   * @param xAnchor X anchor point (0-1 normalized)
+   * @param yAnchor Y anchor point (0-1 normalized)
+   * @param ringWidth Width of the wipe ring
+   * @param ringColor Color of the ring border
+   * @param fade Whether to fade the outgoing content
+   */
+  drawCircularWipe(
+    fromCanvas: Canvas,
+    toCanvas: Canvas,
+    progress: number,
+    xAnchor: number,
+    yAnchor: number,
+    ringWidth: number,
+    ringColor: string | undefined,
+    fade: boolean
+  ): void {
+    const ctx = this.ctx;
+    const width = this._canvas.width;
+    const height = this._canvas.height;
+    const centerX = width * xAnchor;
+    const centerY = height * yAnchor;
+    const maxRadius = Math.sqrt(width * width + height * height);
+    const currentRadius = maxRadius * progress;
+
+    // Draw from canvas with clipping
+    ctx.save();
+
+    if (fade) {
+      ctx.globalAlpha = 1 - progress;
+    }
+
+    // Create circular clip path
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, currentRadius, 0, Math.PI * 2);
+    ctx.clip();
+
+    // Draw the from canvas (revealed area)
+    ctx.drawImage(fromCanvas, 0, 0);
+
+    ctx.restore();
+
+    // Draw the to canvas (wiping area)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, currentRadius, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.globalAlpha = 1;
+    ctx.drawImage(toCanvas, 0, 0);
+    ctx.restore();
+
+    // Draw ring border if specified
+    if (ringColor && ringWidth > 0) {
+      ctx.strokeStyle = ringColor;
+      ctx.lineWidth = ringWidth;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, currentRadius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  /**
+   * Draw fade transition.
+   * @param fromCanvas Previous frame canvas
+   * @param toCanvas Current frame canvas
+   * @param progress 0-1 transition progress
+   */
+  drawFade(fromCanvas: Canvas, toCanvas: Canvas, progress: number): void {
+    const ctx = this.ctx;
+
+    // Draw from canvas with fading alpha
+    ctx.globalAlpha = 1 - progress;
+    ctx.drawImage(fromCanvas, 0, 0);
+
+    // Draw to canvas with increasing alpha
+    ctx.globalAlpha = progress;
+    ctx.drawImage(toCanvas, 0, 0);
+
+    ctx.globalAlpha = 1;
   }
 }

@@ -1,11 +1,13 @@
 import { createCanvas, Canvas } from '@napi-rs/canvas';
 import { Render } from '../Render';
 import { Source } from '../Source';
+import { ElementBase } from '../elements/ElementBase';
 import { LocalRenderOptions, LocalClientOptions } from './LocalRenderOptions';
 import { AnimationEngine } from './animations/AnimationEngine';
 import { Canvas2DRenderer } from './pipeline/Canvas2DRenderer';
 import { FrameGenerator } from './pipeline/FrameGenerator';
 import { VideoEncoder } from './encoding/VideoEncoder';
+import { VideoElementRenderer } from './elements/VideoElementRenderer';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
@@ -37,9 +39,11 @@ export class LocalRenderer {
     this.renderer = new Canvas2DRenderer(this.canvas);
 
     // Determine output path
-    this.outputPath = options.outputPath || path.join(
+    const outputFormat = this.source.properties.outputFormat || 'mp4';
+    const ext = outputFormat === 'jpg' ? 'jpg' : outputFormat;
+    this.outputPath = options.outputPath || clientOptions.outputPath || path.join(
       clientOptions.outputDir || os.tmpdir(),
-      `creatomate-${nanoid()}.mp4`
+      `creatomate-${nanoid()}.${ext}`
     );
   }
 
@@ -135,6 +139,9 @@ export class LocalRenderer {
 
     await this.videoEncoder.initialize();
 
+    // Pre-extract all video frames for better performance
+    await this.preExtractVideoFrames(this.source, width, height, fps, duration);
+
     // Render each frame
     const totalFrames = Math.ceil(fps * duration);
     for (let frame = 0; frame < totalFrames; frame++) {
@@ -164,6 +171,39 @@ export class LocalRenderer {
    */
   getCanvas(): Canvas {
     return this.canvas;
+  }
+
+  /**
+   * Pre-extract video frames for all video elements to improve rendering performance.
+   */
+  private async preExtractVideoFrames(source: Source, width: number, height: number, fps: number, duration: number): Promise<void> {
+    const elements = this.flattenElements(source.properties.elements || []);
+
+    for (const element of elements) {
+      if (element instanceof ElementBase && (element as any).type === 'video') {
+        const props = element.properties as any;
+        const videoSrc = props.source;
+        const fit = props.fit || 'cover';
+
+        if (videoSrc) {
+          console.log(`[LocalRenderer] Pre-extracting frames for: ${videoSrc}`);
+          await VideoElementRenderer.preExtractFrames(videoSrc, fps, duration, width, height, fit);
+        }
+      }
+    }
+  }
+
+  /**
+   * Flatten nested elements (except composition children which are handled separately).
+   */
+  private flattenElements(elements: Array<any>): Array<any> {
+    const result: Array<any> = [];
+    for (const element of elements) {
+      if (element instanceof ElementBase) {
+        result.push(element);
+      }
+    }
+    return result;
   }
 
   /**
