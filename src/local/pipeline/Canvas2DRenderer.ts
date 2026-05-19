@@ -11,7 +11,7 @@ interface RenderContext {
  */
 export class Canvas2DRenderer {
   private _canvas: Canvas;
-  private ctx: any;
+  ctx: any;
 
   constructor(canvas: Canvas) {
     this._canvas = canvas;
@@ -55,18 +55,32 @@ export class Canvas2DRenderer {
       shadowBlur?: number;
       shadowOffsetX?: number;
       shadowOffsetY?: number;
+      letterSpacing?: number;
+      lineHeight?: number;
+      textAlign?: string;
     },
     _context: RenderContext
   ): void {
     const ctx = this.ctx;
 
-    // Set font
+    // Set font with fallback chain for multi-language support
     const fontStyle = style.fontStyle || 'normal';
     const fontWeight = style.fontWeight || 400;
     const fontSize = style.fontSize;
     const fontFamily = style.fontFamily || 'Arial';
-    ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px "${fontFamily}"`;
+    const letterSpacing = style.letterSpacing || 0;
+    const lineHeight = style.lineHeight || 1.2;
+    const textAlign = style.textAlign || 'left';
+
+    // Font fallback chain for Chinese and other scripts
+    const fallbackFonts = 'Microsoft YaHei, Microsoft YaHei UI, SimHei, SimSun, DengXian, Arial, sans-serif';
+    const fullFontFamily = fontFamily === 'Arial'
+      ? fallbackFonts
+      : `"${fontFamily}", ${fallbackFonts}`;
+    ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fullFontFamily}`;
     ctx.textBaseline = 'top';
+    ctx.textAlign = textAlign;
+    ctx.letterSpacing = `${letterSpacing}px`;
 
     // Apply shadow
     if (style.shadowColor && style.shadowBlur) {
@@ -86,7 +100,7 @@ export class Canvas2DRenderer {
     if (style.strokeColor && style.strokeWidth) {
       ctx.strokeStyle = style.strokeColor;
       ctx.lineWidth = style.strokeWidth;
-      ctx.strokeText(text, x, y);
+      this.wrapText(text, x, y, width, height, fontSize, style, true);
     }
 
     // Reset shadow
@@ -104,11 +118,17 @@ export class Canvas2DRenderer {
     maxWidth: number,
     maxHeight: number,
     fontSize: number,
-    _style: any
+    style: any,
+    isStroke: boolean = false
   ): void {
+    const ctx = this.ctx;
     const lines = text.split('\n');
     let currentY = y;
-    const lineHeight = fontSize * 1.2;
+    const lineHeight = (style.lineHeight || 1.2) * fontSize;
+    const letterSpacing = style.letterSpacing || 0;
+    const textAlign = style.textAlign || 'left';
+
+    const fillOrStroke = isStroke ? (text: string, px: number, py: number) => ctx.strokeText(text, px, py) : (text: string, px: number, py: number) => ctx.fillText(text, px, py);
 
     for (const line of lines) {
       if (currentY + lineHeight > y + maxHeight) break;
@@ -118,10 +138,12 @@ export class Canvas2DRenderer {
 
       for (const word of words) {
         const testLine = currentLine ? `${currentLine} ${word}` : word;
-        const metrics = this.ctx.measureText(testLine);
+        const metrics = ctx.measureText(testLine);
 
         if (metrics.width > maxWidth && currentLine) {
-          this.ctx.fillText(currentLine, x, currentY);
+          // Apply alignment for this line
+          const lineX = this.calculateTextX(x, maxWidth, textAlign, ctx.measureText(currentLine).width);
+          fillOrStroke(currentLine, lineX, currentY);
           currentLine = word;
           currentY += lineHeight;
         } else {
@@ -130,9 +152,25 @@ export class Canvas2DRenderer {
       }
 
       if (currentLine) {
-        this.ctx.fillText(currentLine, x, currentY);
+        const lineX = this.calculateTextX(x, maxWidth, textAlign, ctx.measureText(currentLine).width);
+        fillOrStroke(currentLine, lineX, currentY);
         currentY += lineHeight;
       }
+    }
+  }
+
+  /**
+   * Calculate X position based on text alignment.
+   */
+  private calculateTextX(x: number, maxWidth: number, align: string, lineWidth: number): number {
+    switch (align) {
+      case 'center':
+        return x + (maxWidth - lineWidth) / 2;
+      case 'right':
+        return x + maxWidth - lineWidth;
+      case 'left':
+      default:
+        return x;
     }
   }
 
@@ -308,5 +346,42 @@ export class Canvas2DRenderer {
    */
   resetBlendMode(): void {
     this.ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /**
+   * Apply color filter.
+   */
+  applyColorFilter(filter: string, value?: number | string): void {
+    const ctx = this.ctx;
+    const intensity = typeof value === 'number' ? value / 100 : 1;
+
+    switch (filter) {
+      case 'brighten':
+        ctx.filter = `brightness(${1 + intensity})`;
+        break;
+      case 'contrast':
+        ctx.filter = `contrast(${1 + intensity})`;
+        break;
+      case 'invert':
+        ctx.filter = 'invert(100%)';
+        break;
+      case 'grayscale':
+        ctx.filter = `grayscale(${intensity * 100}%)`;
+        break;
+      case 'sepia':
+        ctx.filter = `sepia(${intensity * 100}%)`;
+        break;
+      case 'none':
+      default:
+        ctx.filter = 'none';
+        break;
+    }
+  }
+
+  /**
+   * Reset color filter.
+   */
+  resetColorFilter(): void {
+    this.ctx.filter = 'none';
   }
 }

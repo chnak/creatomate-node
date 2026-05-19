@@ -75,7 +75,7 @@ export class VideoEncoder {
         '-crf', String(crf ?? 23),
         '-pix_fmt', 'yuv420p',
         '-g', '30',
-        '-y', outputPath
+        outputPath
       );
     } else if (outputFormat === 'gif') {
       args.push(
@@ -87,7 +87,20 @@ export class VideoEncoder {
         '-framerate', String(fps),
         '-i', 'pipe:0',
         '-vf', 'fps=15,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse',
-        '-y', outputPath
+        outputPath
+      );
+    } else {
+      // png or jpg - single frame output
+      args.push(
+        '-y',
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-f', 'image2pipe',
+        '-vcodec', 'png',
+        '-framerate', String(fps),
+        '-i', 'pipe:0',
+        '-vframes', '1',
+        outputPath
       );
     }
 

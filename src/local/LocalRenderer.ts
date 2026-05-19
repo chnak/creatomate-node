@@ -1,4 +1,5 @@
 import { createCanvas, Canvas } from '@napi-rs/canvas';
+import { ElementBase } from '../elements/ElementBase';
 import { Render } from '../Render';
 import { Source } from '../Source';
 import { LocalRenderOptions, LocalClientOptions } from './LocalRenderOptions';
@@ -6,6 +7,8 @@ import { AnimationEngine } from './animations/AnimationEngine';
 import { Canvas2DRenderer } from './pipeline/Canvas2DRenderer';
 import { FrameGenerator } from './pipeline/FrameGenerator';
 import { VideoEncoder } from './encoding/VideoEncoder';
+import { MediaDownloader } from './utils/MediaDownloader';
+import { AudioMixer } from './utils/AudioMixer';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
@@ -37,9 +40,11 @@ export class LocalRenderer {
     this.renderer = new Canvas2DRenderer(this.canvas);
 
     // Determine output path
+    const outputFormat = this.source.properties.outputFormat || 'mp4';
+    const ext = outputFormat === 'jpg' ? 'jpg' : outputFormat;
     this.outputPath = options.outputPath || path.join(
       clientOptions.outputDir || os.tmpdir(),
-      `creatomate-${nanoid()}.mp4`
+      `creatomate-${nanoid()}.${ext}`
     );
   }
 
@@ -112,6 +117,35 @@ export class LocalRenderer {
     const duration = this.source.properties.duration || 5;
     const outputFormat = this.source.properties.outputFormat || 'mp4';
 
+    // Pre-download all media elements to local cache
+    const downloader = MediaDownloader.getInstance();
+    const audioMixer = AudioMixer.getInstance();
+    const elements = this.source.properties.elements;
+    if (elements && elements.length > 0) {
+      await downloader.preloadElements(elements as ElementBase<any>[]);
+    }
+
+    // Collect audio tracks for mixing
+    const audioTracks = audioMixer.collectAudioTracks(elements as ElementBase<any>[], duration);
+
+    // For single-frame formats (png, jpg), render just one frame directly
+    if (outputFormat === 'png' || outputFormat === 'jpg') {
+      const frameGenerator = new FrameGenerator(
+        this.canvas,
+        this.renderer,
+        this.animationEngine,
+        this.source,
+        { width, height, fps, duration }
+      );
+
+      const frameData = await frameGenerator.renderFrame(0);
+      await fs.writeFile(this.outputPath, frameData);
+      return this.outputPath;
+    }
+
+    // Create temp file for video without audio
+    const tempVideoPath = path.join(os.tmpdir(), `creatomate-video-${nanoid()}.mp4`);
+
     // Initialize frame generator
     this.frameGenerator = new FrameGenerator(
       this.canvas,
@@ -121,9 +155,9 @@ export class LocalRenderer {
       { width, height, fps, duration }
     );
 
-    // Initialize video encoder
+    // Initialize video encoder to temp file
     this.videoEncoder = new VideoEncoder({
-      outputPath: this.outputPath,
+      outputPath: tempVideoPath,
       width,
       height,
       fps,
@@ -155,6 +189,16 @@ export class LocalRenderer {
     // Finalize video
     await this.videoEncoder.finalize();
     await this.videoEncoder.dispose();
+
+    // Mix audio with video if there are audio tracks
+    if (audioTracks.length > 0) {
+      await audioMixer.mixAudio(tempVideoPath, audioTracks, this.outputPath, duration);
+      // Clean up temp video
+      await fs.remove(tempVideoPath);
+    } else {
+      // No audio, just move temp video to final output
+      await fs.move(tempVideoPath, this.outputPath, { overwrite: true });
+    }
 
     return this.outputPath;
   }

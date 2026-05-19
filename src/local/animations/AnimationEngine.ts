@@ -89,6 +89,18 @@ export class AnimationEngine {
       return lerp(before.value, after.value, easedT) as unknown as T;
     }
 
+    // Handle percentage string interpolation (e.g., '100%' to '50%')
+    if (typeof before.value === 'string' && typeof after.value === 'string') {
+      const beforeNum = parseFloat(before.value);
+      const afterNum = parseFloat(after.value);
+      if (!isNaN(beforeNum) && !isNaN(afterNum)) {
+        const result = lerp(beforeNum, afterNum, easedT);
+        // Preserve the unit (%, px, etc.) from the before value
+        const unit = before.value.replace(/^[-0-9.]+/, '');
+        return (result + unit) as unknown as T;
+      }
+    }
+
     // For non-numeric values, just return before value at t < 0.5, after otherwise
     return t < 0.5 ? before.value : after.value;
   }
