@@ -19,22 +19,18 @@ export class ImageElementRenderer {
       width: number;
       height: number;
       opacity: number;
-      skewX: number;
-      skewY: number;
-      clip?: boolean;
-      rotationX?: number;
-      rotationY?: number;
+      blendMode: string;
+      rotation: number;
+      scaleX: number;
+      scaleY: number;
+      blurRadius: number;
+      clip: boolean;
     },
     context: { time: number; width: number; height: number }
   ): Promise<void> {
     const props = element.properties as any;
     const source = props.source;
-    const blendMode = props.blendMode;
-    const colorFilter = props.colorFilter;
-    const colorFilterValue = props.colorFilterValue;
-    const strokeColor = props.strokeColor;
-    const strokeWidth = props.strokeWidth ?? 0;
-    const borderRadius = props.borderRadius ?? 0;
+    const colorOverlay = props.colorOverlay;
 
     if (!source) return;
 
@@ -42,106 +38,40 @@ export class ImageElementRenderer {
     const localPath = await this.downloader.getLocalPath(source);
 
     renderer.setOpacity(state.opacity);
-
-    // Apply blend mode if specified
-    if (blendMode && blendMode !== 'none') {
-      renderer.setBlendMode(blendMode);
+    renderer.setBlendMode(state.blendMode);
+    if (state.blurRadius > 0) {
+      renderer.setBlurRadius(state.blurRadius);
     }
 
-    try {
-      const { loadImage } = await import('@napi-rs/canvas');
-      const img = await loadImage(localPath);
-
-      // Calculate draw area based on fit property
-      const { drawX, drawY, drawWidth, drawHeight } = this.calculateFit(
-        img.width, img.height,
-        state.x, state.y, state.width, state.height,
-        props.fit
-      );
-
-      // Apply skew transformation
-      if (state.skewX !== 0 || state.skewY !== 0) {
-        const centerX = state.x + state.width / 2;
-        const centerY = state.y + state.height / 2;
-        renderer.ctx.translate(centerX, centerY);
-        renderer.ctx.transform(1, Math.tan(state.skewY), Math.tan(state.skewX), 1, 0, 0);
-        renderer.ctx.translate(-centerX, -centerY);
-      }
-
-      // Apply clip if needed
-      if (state.clip || borderRadius > 0) {
-        renderer.ctx.save();
-        renderer.ctx.beginPath();
-        if (borderRadius > 0) {
-          const r = Math.min(borderRadius, state.width / 2, state.height / 2);
-          renderer.ctx.moveTo(drawX + r, drawY);
-          renderer.ctx.lineTo(drawX + drawWidth - r, drawY);
-          renderer.ctx.arcTo(drawX + drawWidth, drawY, drawX + drawWidth, drawY + r, r);
-          renderer.ctx.lineTo(drawX + drawWidth, drawY + drawHeight - r);
-          renderer.ctx.arcTo(drawX + drawWidth, drawY + drawHeight, drawX + drawWidth - r, drawY + drawHeight, r);
-          renderer.ctx.lineTo(drawX + r, drawY + drawHeight);
-          renderer.ctx.arcTo(drawX, drawY + drawHeight, drawX, drawY + drawHeight - r, r);
-          renderer.ctx.lineTo(drawX, drawY + r);
-          renderer.ctx.arcTo(drawX, drawY, drawX + r, drawY, r);
-          renderer.ctx.closePath();
-        } else {
-          renderer.ctx.rect(state.x, state.y, state.width, state.height);
-        }
-        renderer.ctx.clip();
-      }
-
-      // Apply color filter before drawing
-      if (colorFilter && colorFilter !== 'none') {
-        renderer.applyColorFilter(colorFilter, colorFilterValue);
-      }
-
-      // Apply blur effect before drawing
-      if (props.blurRadius && props.blurRadius > 0) {
-        const blurAmount = Math.min(props.blurRadius, 100);
-        renderer.ctx.filter = `blur(${blurAmount}px)`;
-        renderer.ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
-        renderer.ctx.filter = 'none';
-      } else if (props.repeat) {
-        // Repeat image as pattern to fill bounds
-        const pattern = renderer.ctx.createPattern(img, 'repeat');
-        if (pattern) {
-          renderer.ctx.fillStyle = pattern;
-          renderer.ctx.fillRect(state.x, state.y, state.width, state.height);
-        }
-      } else {
-        renderer.ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
-      }
-
-      // Apply color overlay
-      if (props.colorOverlay) {
-        renderer.ctx.fillStyle = props.colorOverlay;
-        renderer.ctx.fillRect(state.x, state.y, state.width, state.height);
-      }
-
-      // Apply stroke
-      if (strokeColor && strokeWidth > 0) {
-        renderer.ctx.strokeStyle = strokeColor;
-        renderer.ctx.lineWidth = strokeWidth;
-        renderer.ctx.stroke();
-      }
-
-      if (state.clip || borderRadius > 0) {
-        renderer.ctx.restore();
-      }
-    } catch (e) {
-      console.warn('Failed to load image:', source, e);
+    // Apply clipping before drawing
+    if (state.clip) {
+      renderer.beginClip(state.x, state.y, state.width, state.height);
     }
 
-    // Reset blend mode
-    if (blendMode && blendMode !== 'none') {
-      renderer.resetBlendMode();
+    // Apply rotation and scale around element center
+    const centerX = state.x + state.width / 2;
+    const centerY = state.y + state.height / 2;
+    if (state.rotation !== 0 || state.scaleX !== 1 || state.scaleY !== 1) {
+      renderer.applyTransforms(state.rotation, state.scaleX, state.scaleY, centerX, centerY);
     }
 
-    // Reset color filter
-    if (colorFilter && colorFilter !== 'none') {
-      renderer.resetColorFilter();
+    await renderer.drawImage(source, state.x, state.y, state.width, state.height, context);
+
+    // Apply color overlay after drawing the image
+    if (colorOverlay) {
+      renderer.setColorOverlay(colorOverlay, state.x, state.y, state.width, state.height);
     }
 
+    if (state.rotation !== 0 || state.scaleX !== 1 || state.scaleY !== 1) {
+      renderer.resetTransform();
+    }
+    if (state.clip) {
+      renderer.endClip();
+    }
+    if (state.blurRadius > 0) {
+      renderer.resetBlur();
+    }
+    renderer.resetBlendMode();
     renderer.resetOpacity();
   }
 

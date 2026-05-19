@@ -17,11 +17,12 @@ export class TextElementRenderer {
       width: number;
       height: number;
       opacity: number;
+      blendMode: string;
       rotation: number;
       scaleX: number;
       scaleY: number;
-      rotationX?: number;
-      rotationY?: number;
+      compositionWidth?: number;
+      compositionHeight?: number;
     },
     context: { time: number; width: number; height: number }
   ): Promise<void> {
@@ -166,69 +167,25 @@ export class TextElementRenderer {
     }
 
     renderer.setOpacity(state.opacity);
+    renderer.setBlendMode(state.blendMode);
 
-    // Apply blend mode if specified
-    if (blendMode && blendMode !== 'none') {
-      renderer.setBlendMode(blendMode);
+    // Apply rotation and scale around element center
+    const centerX = state.x + state.width / 2;
+    const centerY = state.y + state.height / 2;
+    if (state.rotation !== 0 || state.scaleX !== 1 || state.scaleY !== 1) {
+      renderer.applyTransforms(state.rotation, state.scaleX, state.scaleY, centerX, centerY);
     }
 
-    // Apply color filter
-    if (colorFilter && colorFilter !== 'none') {
-      renderer.applyColorFilter(colorFilter, colorFilterValue);
-    }
-
-    // Draw text background if specified
-    if (bgProps.backgroundColor || bgProps.background_color) {
-      const bgColor = bgProps.backgroundColor || bgProps.background_color;
-      const rawXPadding = bgProps.backgroundXPadding ?? bgProps.background_x_padding;
-      const rawYPadding = bgProps.backgroundYPadding ?? bgProps.background_y_padding;
-      const rawBorderRadius = bgProps.backgroundBorderRadius ?? bgProps.background_border_radius;
-
-      // Parse padding value (supports number or percentage string)
-      const parsePadding = (val: any): number => {
-        if (typeof val === 'number') return val * fontSize / 100;
-        if (typeof val === 'string' && val.endsWith('%')) return parseFloat(val) / 100 * fontSize;
-        if (typeof val === 'string') return parseFloat(val) || 0;
-        return 0;
-      };
-
-      const bgPadding = parsePadding(rawXPadding);
-      const bgYPadding = parsePadding(rawYPadding);
-      const bgBorderRadius = typeof rawBorderRadius === 'number' ? rawBorderRadius : (parseFloat(rawBorderRadius) || 0);
-
-      renderer.ctx.fillStyle = bgColor;
-      const lines = text.split('\n');
-      const totalHeight = lines.length * fontSize * lineHeight;
-      const bgX = textX - bgPadding + textAlignOffset;
-      const bgY = textY - bgYPadding;
-      const bgWidth = state.width + bgPadding * 2;
-      const bgHeight = totalHeight + bgYPadding * 2;
-
-      renderer.ctx.beginPath();
-      if (bgBorderRadius > 0) {
-        const r = Math.min(bgBorderRadius, bgWidth / 2, bgHeight / 2);
-        renderer.ctx.moveTo(bgX + r, bgY);
-        renderer.ctx.lineTo(bgX + bgWidth - r, bgY);
-        renderer.ctx.arcTo(bgX + bgWidth, bgY, bgX + bgWidth, bgY + r, r);
-        renderer.ctx.lineTo(bgX + bgWidth, bgY + bgHeight - r);
-        renderer.ctx.arcTo(bgX + bgWidth, bgY + bgHeight, bgX + bgWidth - r, bgY + bgHeight, r);
-        renderer.ctx.lineTo(bgX + r, bgY + bgHeight);
-        renderer.ctx.arcTo(bgX, bgY + bgHeight, bgX, bgY + bgHeight - r, r);
-        renderer.ctx.lineTo(bgX, bgY + r);
-        renderer.ctx.arcTo(bgX, bgY, bgX + r, bgY, r);
-        renderer.ctx.closePath();
-      } else {
-        renderer.ctx.rect(bgX, bgY, bgWidth, bgHeight);
-      }
-      renderer.ctx.fill();
-    }
+    // Determine effective bounds for alignment - use composition dimensions if available
+    const effectiveWidth = state.compositionWidth || state.width;
+    const effectiveHeight = state.compositionHeight || state.height;
 
     renderer.drawText(
       text,
-      textX + textAlignOffset,
-      textY,
-      state.width,
-      state.height,
+      state.x,
+      state.y,
+      effectiveWidth,
+      effectiveHeight,
       {
         fontFamily,
         fontSize,
@@ -241,23 +198,16 @@ export class TextElementRenderer {
         shadowBlur: props.shadowBlur,
         shadowOffsetX: props.shadowX,
         shadowOffsetY: props.shadowY,
-        letterSpacing,
-        lineHeight,
-        textAlign: effectiveTextAlign,
+        xAlignment: props.xAlignment,
+        yAlignment: props.yAlignment,
       },
       context
     );
 
-    // Reset color filter
-    if (colorFilter && colorFilter !== 'none') {
-      renderer.resetColorFilter();
+    if (state.rotation !== 0 || state.scaleX !== 1 || state.scaleY !== 1) {
+      renderer.resetTransform();
     }
-
-    // Reset blend mode
-    if (blendMode && blendMode !== 'none') {
-      renderer.resetBlendMode();
-    }
-
+    renderer.resetBlendMode();
     renderer.resetOpacity();
   }
 

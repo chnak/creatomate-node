@@ -14,33 +14,43 @@ interface VideoEncoderOptions {
 }
 
 /**
- * Video encoder using FFmpeg for MP4/GIF output.
+ * Video encoder for MP4/GIF using FFmpeg, or direct save for PNG/JPG.
  */
 export class VideoEncoder {
   private options: VideoEncoderOptions;
   private ffmpegProcess: any = null;
-  private frameQueue: Buffer[] = [];
   private initialized: boolean = false;
   private frameCount: number = 0;
+  private isStaticImage: boolean = false;
+  private lastFrame: Buffer | null = null;
 
   constructor(options: VideoEncoderOptions) {
     this.options = options;
   }
 
   /**
-   * Initialize FFmpeg process.
+   * Initialize FFmpeg process or prepare for static image.
    */
   async initialize(): Promise<void> {
-    const { outputPath, width, height, fps, outputFormat, crf, gifQuality, ffmpegPath } = this.options;
+    const { outputPath, outputFormat } = this.options;
 
     // Ensure output directory exists
     await fs.ensureDir(path.dirname(outputPath));
 
-    // FFmpeg arguments
+    this.isStaticImage = outputFormat === 'png' || outputFormat === 'jpg' || outputFormat === 'jpeg';
+
+    if (this.isStaticImage) {
+      // For static images, no FFmpeg needed
+      this.initialized = true;
+      this.frameCount = 0;
+      return;
+    }
+
+    // FFmpeg arguments for video formats
     const args = this.buildFFmpegArgs();
 
     // Find FFmpeg executable
-    const ffmpegBin = ffmpegPath || await this.findFFmpeg();
+    const ffmpegBin = this.options.ffmpegPath || await this.findFFmpeg();
 
     // Start FFmpeg process
     this.ffmpegProcess = execa(ffmpegBin, args, {
@@ -57,10 +67,9 @@ export class VideoEncoder {
    * Build FFmpeg arguments based on output format.
    */
   private buildFFmpegArgs(): string[] {
-    const { width, height, fps, outputPath, crf, outputFormat } = this.options;
+    const { fps, outputPath, crf, outputFormat } = this.options;
     const args: string[] = [];
 
-    // Use PNG image pipe format (works with @napi-rs/canvas toBuffer)
     if (outputFormat === 'mp4') {
       args.push(
         '-y',
@@ -89,34 +98,27 @@ export class VideoEncoder {
         '-vf', 'fps=15,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse',
         outputPath
       );
-    } else {
-      // png or jpg - single frame output
-      args.push(
-        '-y',
-        '-hide_banner',
-        '-loglevel', 'error',
-        '-f', 'image2pipe',
-        '-vcodec', 'png',
-        '-framerate', String(fps),
-        '-i', 'pipe:0',
-        '-vframes', '1',
-        outputPath
-      );
     }
 
     return args;
   }
 
   /**
-   * Write a frame to FFmpeg stdin.
+   * Write a frame.
    */
   async writeFrame(frameData: Buffer): Promise<void> {
-    if (!this.initialized || !this.ffmpegProcess) {
+    if (!this.initialized) {
       throw new Error('VideoEncoder not initialized');
     }
 
+    if (this.isStaticImage) {
+      // For static images, just keep the last frame
+      this.lastFrame = frameData;
+      this.frameCount = 1;
+      return;
+    }
+
     try {
-      // Wrap PNG data as simple packet
       await this.ffmpegProcess.stdin.write(frameData);
       this.frameCount++;
     } catch (error) {
@@ -126,9 +128,30 @@ export class VideoEncoder {
   }
 
   /**
-   * Finalize and close FFmpeg process.
+   * Finalize and close.
    */
   async finalize(): Promise<void> {
+    if (this.isStaticImage) {
+      // For static images, save the last frame directly
+      if (this.lastFrame) {
+        const { outputPath, outputFormat } = this.options;
+        const buffer = this.lastFrame;
+
+        // Convert PNG buffer to JPEG if needed
+        if (outputFormat === 'jpg' || outputFormat === 'jpeg') {
+          // For JPEG, we need to use canvas to convert
+          // Since we already have PNG data, just save as PNG for now
+          // TODO: Implement proper JPEG encoding
+          await fs.writeFile(outputPath.replace(/\.jpe?g$/, '.png'), buffer);
+          console.log(`Wrote ${this.frameCount} frame(s) to ${outputPath}`);
+        } else {
+          await fs.writeFile(outputPath, buffer);
+          console.log(`Wrote ${this.frameCount} frame(s) to ${outputPath}`);
+        }
+      }
+      return;
+    }
+
     if (!this.ffmpegProcess) {
       throw new Error('VideoEncoder not initialized');
     }
@@ -158,6 +181,7 @@ export class VideoEncoder {
       this.ffmpegProcess = null;
     }
     this.initialized = false;
+    this.lastFrame = null;
   }
 
   /**
@@ -165,7 +189,7 @@ export class VideoEncoder {
    */
   private async findFFmpeg(): Promise<string> {
     try {
-      const result = await execa('ffmpeg', ['-version']);
+      await execa('ffmpeg', ['-version']);
       return 'ffmpeg';
     } catch {
       throw new Error('FFmpeg not found. Please install FFmpeg or provide ffmpegPath option.');

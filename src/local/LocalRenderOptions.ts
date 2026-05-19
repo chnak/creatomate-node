@@ -12,6 +12,12 @@ export interface LocalClientOptions {
   outputDir?: string;
 
   /**
+   * Specific output file path. If provided, this exact path will be used.
+   * Takes precedence over outputDir.
+   */
+  outputPath?: string;
+
+  /**
    * Maximum number of parallel workers for frame rendering.
    * @default os.cpus().length
    */

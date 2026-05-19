@@ -114,9 +114,13 @@ export class CompositionRenderer {
     const children = props.elements || [];
     for (const child of children) {
       if (child instanceof ElementBase) {
-        // Pass the already-resolved child state from FrameGenerator
-        // The child has already been resolved with composition dimensions as base
-        await renderChild(child, state, context);
+        // Pass composition dimensions so children can align relative to composition bounds
+        const childStateWithCompositionBounds = {
+          ...state,
+          compositionWidth: state.width,
+          compositionHeight: state.height,
+        };
+        await renderChild(child, childStateWithCompositionBounds, context);
       }
     }
 
